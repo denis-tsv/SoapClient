@@ -94,7 +94,7 @@ namespace SoapClientGenerator
 			foreach (var prop in Info.DeclaredProperties.Where(p => p.GetCustomAttribute<XmlAnyAttributeAttribute>() == null && p.GetCustomAttribute<XmlIgnoreAttribute>() == null))
 			{
 				// TODO check
-				if (prop.PropertyType == typeof(System.Xml.XmlNode[]))
+				if (prop.PropertyType == typeof(System.Xml.XmlNode[]) || prop.PropertyType == typeof(System.Runtime.Serialization.ExtensionDataObject))
 					continue;
 
 				var propCode = new CodeMemberField
