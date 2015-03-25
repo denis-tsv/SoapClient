@@ -4,15 +4,15 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace SoapClientGenerator
+namespace SoapClientGenerator.Roslyn
 {
     public class CollectMetadataSyntaxWalker : CSharpSyntaxWalker
     {
         private readonly SemanticModel _semanticModel;
 
-        private readonly List<INamedTypeSymbol> _services = new List<INamedTypeSymbol>();
-        private readonly List<INamedTypeSymbol> _contracts = new List<INamedTypeSymbol>();
-        private readonly List<INamedTypeSymbol> _enums = new List<INamedTypeSymbol>();
+        public readonly List<INamedTypeSymbol> Services = new List<INamedTypeSymbol>();
+        public readonly List<INamedTypeSymbol> Contracts = new List<INamedTypeSymbol>();
+        public readonly List<INamedTypeSymbol> Enums = new List<INamedTypeSymbol>();
 
         public CollectMetadataSyntaxWalker(SemanticModel semanticModel)
         {
@@ -21,7 +21,7 @@ namespace SoapClientGenerator
 
         public override void VisitEnumDeclaration(EnumDeclarationSyntax node)
         {
-            _enums.Add(_semanticModel.GetDeclaredSymbol(node));
+            Enums.Add(_semanticModel.GetDeclaredSymbol(node));
         }
 
         public override void VisitInterfaceDeclaration(InterfaceDeclarationSyntax node)
@@ -29,7 +29,7 @@ namespace SoapClientGenerator
             var symbol = _semanticModel.GetDeclaredSymbol(node);
             if (symbol.GetAttributes().Any(attr => attr.AttributeClass.Name == "ServiceContractAttribute"))
             {
-                _services.Add(symbol);
+                Services.Add(symbol);
             }
         }
 
@@ -38,18 +38,8 @@ namespace SoapClientGenerator
             var symbol = _semanticModel.GetDeclaredSymbol(node);
             if (symbol.GetAttributes().Any(attr =>attr.AttributeClass.Name == "DataContractAttribute" || attr.AttributeClass.Name == "MessageContractAttribute"))
             {
-                _contracts.Add(symbol);
+                Contracts.Add(symbol);
             }
-        }
-
-        public MetadataInfo GetCollectedMetadata()
-        {
-            return new MetadataInfo
-            {
-                Contracts = _contracts,
-                Enums = _enums,
-                Services = _services,
-            };
         }
     }
 }
