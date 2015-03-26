@@ -171,8 +171,8 @@ namespace SoapClientGenerator.Roslyn
 
                 var name = propertySymbol.Name == "fixed" ? "@fixed" : propertySymbol.Name;
                 var list = SyntaxFactory.AccessorList()
-                    .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.ParseToken(";")))
-                    .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.ParseToken(";")));
+                    .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)))
+                    .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)));
 
                 var propertySyntax = SyntaxFactory.PropertyDeclaration(SyntaxFactory.ParseTypeName(GetTypeName(propertySymbol.Type)), name);
                 propertySyntax = propertySyntax
@@ -409,9 +409,9 @@ namespace SoapClientGenerator.Roslyn
 
         private EnumDeclarationSyntax AddEnum(INamedTypeSymbol enumInfo)
         {
-            var enumDecl = SyntaxFactory.EnumDeclaration(enumInfo.Name);
-            enumDecl = enumDecl.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
-
+            var enumDecl = SyntaxFactory
+                .EnumDeclaration(enumInfo.Name)
+                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
 
             foreach (var member in enumInfo.GetMembers().Where(m => m.Kind == SymbolKind.Field))
             {
@@ -424,23 +424,22 @@ namespace SoapClientGenerator.Roslyn
 
         private InterfaceDeclarationSyntax AddClientInterface(INamedTypeSymbol serviceInterface)
         {
-            var interfaceDeclarationSyntax = SyntaxFactory.InterfaceDeclaration(serviceInterface.Name);
-
-            interfaceDeclarationSyntax = interfaceDeclarationSyntax.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
-
-
+            var interfaceDeclarationSyntax = SyntaxFactory
+                .InterfaceDeclaration(serviceInterface.Name)
+                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+            
             var asyncOperationContracts = serviceInterface.GetMembers()
                 .Cast<IMethodSymbol>()
                 .Where(item => ((INamedTypeSymbol)item.ReturnType).IsGenericType && item.ReturnType.Name == "Task")
                 .Where(item => item.GetAttributes().Any(attr => attr.AttributeClass.Name == "OperationContractAttribute"));
-
-
+            
             foreach (var serviceMethod in asyncOperationContracts)
             {
                 var returnType = SyntaxFactory.ParseTypeName(serviceMethod.ReturnType.ToString());
-                var method = SyntaxFactory.MethodDeclaration(returnType, serviceMethod.Name);
-                method = method.WithSemicolonToken(SyntaxFactory.ParseToken(";").WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
-
+                var method = SyntaxFactory
+                    .MethodDeclaration(returnType, serviceMethod.Name)
+                    .WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)
+                    .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
 
                 foreach (var parameter in serviceMethod.Parameters)
                 {
@@ -462,23 +461,20 @@ namespace SoapClientGenerator.Roslyn
 
         private ClassDeclarationSyntax AddClientImplementation(INamedTypeSymbol serviceInterface)
         {
-            var classDeclarationSyntax = SyntaxFactory.ClassDeclaration(serviceInterface.Name + "Client");
-
-            classDeclarationSyntax = classDeclarationSyntax.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)).Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword)));
-
-
             var interfaceBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(serviceInterface.Name));
             var clientBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(ClientBaseClassName));
             var baseList = SyntaxFactory.BaseList().AddTypes(clientBaseType, interfaceBaseType);
-            classDeclarationSyntax = classDeclarationSyntax.WithBaseList(baseList);
-
-
+            
+            var classDeclarationSyntax = SyntaxFactory
+                .ClassDeclaration(serviceInterface.Name + "Client")
+                .WithBaseList(baseList)
+                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)).Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword)));
+            
             var asyncOperationContracts = serviceInterface.GetMembers()
                 .Cast<IMethodSymbol>()
                 .Where(item => ((INamedTypeSymbol)item.ReturnType).IsGenericType && item.ReturnType.Name == "Task")
                 .Where(item => item.GetAttributes().Any(attr => attr.AttributeClass.Name == "OperationContractAttribute"));
-
-
+            
             foreach (var serviceMethod in asyncOperationContracts)
             {
                 var returnType = SyntaxFactory.ParseTypeName(serviceMethod.ReturnType.ToString());
