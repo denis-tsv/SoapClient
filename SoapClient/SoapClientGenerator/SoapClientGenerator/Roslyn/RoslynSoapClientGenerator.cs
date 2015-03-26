@@ -1,13 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.ServiceModel;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.MSBuild;
 
 namespace SoapClientGenerator.Roslyn
 {
@@ -17,7 +18,7 @@ namespace SoapClientGenerator.Roslyn
         {
             CreateProxy(SvcUtilPath, WsdlUri, ResultFilePath, Namespace);
         }
-        
+
         private void CreateProxy(string svcutil, string wsdlUri, string outFilePath, string ns)
         {
             Console.WriteLine("SvcUtil {0}", svcutil);
@@ -42,28 +43,30 @@ namespace SoapClientGenerator.Roslyn
             var semanticModel = compilation.GetSemanticModel(syntaxTree);
             var root = syntaxTree.GetRoot();
 
+
+
             // 3. Parse trees
             Console.WriteLine("Gathering info...");
             var metadata = ParseTree(root, semanticModel);
 
             // 4. Generate source code
             Console.WriteLine("Code generation...");
-            var newRoot = GeneratedCode(metadata, outFilePath, ns);
-            File.WriteAllText(outFilePath, newRoot.ToFullString());
+            var newRoot = GenerateCode(metadata, ns);
+            MSBuildWorkspace workspace = MSBuildWorkspace.Create();
+            var res = Formatter.Format(newRoot, workspace);
+
+            File.WriteAllText(outFilePath, res.ToFullString());
 
 
             Console.WriteLine("DONE!");
             Console.WriteLine();
         }
 
-        private NamespaceDeclarationSyntax GeneratedCode(CollectMetadataSyntaxWalker metadataInfo, string srcFile, string ns)
+        private NamespaceDeclarationSyntax GenerateCode(CollectMetadataSyntaxWalker metadataInfo, string ns)
         {
-            var nameSpace = SyntaxFactory.NamespaceDeclaration(SyntaxFactory.ParseName(ns));
-            nameSpace = nameSpace
-                .WithName(nameSpace.Name.WithLeadingTrivia(SyntaxFactory.Space).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithOpenBraceToken(nameSpace.OpenBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithCloseBraceToken(nameSpace.CloseBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
-            nameSpace = nameSpace.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Xml.Serialization").WithLeadingTrivia(SyntaxFactory.Space)).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+            var nameSpace = SyntaxFactory
+                .NamespaceDeclaration(SyntaxFactory.ParseName(ns))
+                .AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Xml.Serialization")));
 
             foreach (var serviceInterface in metadataInfo.Services)
             {
@@ -100,12 +103,9 @@ namespace SoapClientGenerator.Roslyn
 
         private ClassDeclarationSyntax AddDataContract(INamedTypeSymbol classInfo)
         {
-            var classDecl = SyntaxFactory.ClassDeclaration(classInfo.Name);
-            classDecl = classDecl
-                .WithIdentifier(classDecl.Identifier.WithLeadingTrivia(SyntaxFactory.Space).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.ParseToken("public").WithTrailingTrivia(SyntaxFactory.Space)))
-                .WithOpenBraceToken(classDecl.OpenBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithCloseBraceToken(classDecl.CloseBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+            var classDecl = SyntaxFactory
+                .ClassDeclaration(classInfo.Name)
+                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
 
             if (classInfo.BaseType.Name != "Object")
             {
@@ -114,7 +114,7 @@ namespace SoapClientGenerator.Roslyn
             }
 
             var xmlTypeAttr = classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlTypeAttribute");
-            var messageContractAttr = classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "MessageContractAttribute");//Info.GetCustomAttribute<MessageContractAttribute>();
+            var messageContractAttr = classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "MessageContractAttribute");
 
             bool addXmlRoot = false;
             string xmlRootElementName = null;
@@ -135,7 +135,7 @@ namespace SoapClientGenerator.Roslyn
                 }
             }
 
-            var bodyMember = classInfo.GetMembers().FirstOrDefault(m => m.Kind == SymbolKind.Field && m.GetAttributes().Any(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute")); //Info.DeclaredFields.FirstOrDefault(f => f.IsPublic && f.GetCustomAttribute<MessageBodyMemberAttribute>() != null);
+            var bodyMember = classInfo.GetMembers().FirstOrDefault(m => m.Kind == SymbolKind.Field && m.GetAttributes().Any(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute"));
             if (bodyMember != null)
             {
                 xmlRootElementName = bodyMember.Name;
@@ -150,12 +150,11 @@ namespace SoapClientGenerator.Roslyn
                 var arg2 = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", xmlRootNamespace)));
                 attr = attr.AddArgumentListArguments(arg1, arg2);
 
-                classDecl = classDecl.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(attr).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+                classDecl = classDecl.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(attr));
             }
 
             classDecl = AddDataContractFields(classDecl, classInfo);
             classDecl = AddDataContractProperties(classDecl, classInfo);
-
 
             return classDecl;
         }
@@ -175,11 +174,11 @@ namespace SoapClientGenerator.Roslyn
                     .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.ParseToken(";")))
                     .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.ParseToken(";")));
 
-                var propertySyntax = SyntaxFactory.PropertyDeclaration(SyntaxFactory.ParseTypeName(GetTypeName(propertySymbol.Type)).WithTrailingTrivia(SyntaxFactory.Space), name);
+                var propertySyntax = SyntaxFactory.PropertyDeclaration(SyntaxFactory.ParseTypeName(GetTypeName(propertySymbol.Type)), name);
                 propertySyntax = propertySyntax
-                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
-                    .WithAccessorList(list)
-                    .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
+                    .WithAccessorList(list);
+
 
                 var xmlElementAttrs = propertySymbol.GetAttributes().Where(attr => attr.AttributeClass.Name == "XmlElementAttribute");
                 foreach (var xmlElementAttr in xmlElementAttrs)
@@ -211,7 +210,7 @@ namespace SoapClientGenerator.Roslyn
                     var orderArg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "Order", order)));
                     xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgumentListArguments(orderArg);
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax));
                 }
 
                 var xmlAnyElementAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlAnyElementAttribute");
@@ -230,7 +229,7 @@ namespace SoapClientGenerator.Roslyn
                     var orderArg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "Order", order)));
                     xmlAnyElementAttrSyntax = xmlAnyElementAttrSyntax.AddArgumentListArguments(orderArg);
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAnyElementAttrSyntax).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAnyElementAttrSyntax));
                 }
 
                 var xmlAttributeAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlAttributeAttribute");
@@ -259,7 +258,7 @@ namespace SoapClientGenerator.Roslyn
                         xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddArgumentListArguments(arg);
                     }
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAttributeAttrSyntax).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAttributeAttrSyntax));
                 }
 
                 var xmlTextAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlTextAttribute");
@@ -267,7 +266,7 @@ namespace SoapClientGenerator.Roslyn
                 {
                     var xmlTextAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlTextAttribute"));
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlTextAttrSyntax).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlTextAttrSyntax));
                 }
 
                 classDecl = classDecl.AddMembers(propertySyntax);
@@ -300,7 +299,7 @@ namespace SoapClientGenerator.Roslyn
                 {
                     type = SyntaxFactory.ParseTypeName("XElement[]");
                 }
-                var decl = SyntaxFactory.VariableDeclarator(fieldSymbol.Name).WithLeadingTrivia(SyntaxFactory.Space);
+                var decl = SyntaxFactory.VariableDeclarator(fieldSymbol.Name);
 
 
                 var fieldSyntax = SyntaxFactory.FieldDeclaration(SyntaxFactory.VariableDeclaration(type).WithVariables(SyntaxFactory.SeparatedList(new[] { decl })));
@@ -347,9 +346,9 @@ namespace SoapClientGenerator.Roslyn
 
                 var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute")).WithArgumentList(args);
                 fieldSyntax = fieldSyntax
-                    .AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
-                    .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                    .AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax))
+                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+
                 classDecl = classDecl.AddMembers(fieldSyntax);
 
             }
@@ -411,14 +410,12 @@ namespace SoapClientGenerator.Roslyn
         private EnumDeclarationSyntax AddEnum(INamedTypeSymbol enumInfo)
         {
             var enumDecl = SyntaxFactory.EnumDeclaration(enumInfo.Name);
-            enumDecl = enumDecl
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
-                .WithIdentifier(enumDecl.Identifier.WithLeadingTrivia(SyntaxFactory.Space).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithCloseBraceToken(enumDecl.CloseBraceToken.WithLeadingTrivia(SyntaxFactory.CarriageReturnLineFeed).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+            enumDecl = enumDecl.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+
 
             foreach (var member in enumInfo.GetMembers().Where(m => m.Kind == SymbolKind.Field))
             {
-                var memberSyntax = SyntaxFactory.EnumMemberDeclaration(member.Name).WithLeadingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                var memberSyntax = SyntaxFactory.EnumMemberDeclaration(member.Name);
                 enumDecl = enumDecl.AddMembers(memberSyntax);
             }
 
@@ -429,11 +426,8 @@ namespace SoapClientGenerator.Roslyn
         {
             var interfaceDeclarationSyntax = SyntaxFactory.InterfaceDeclaration(serviceInterface.Name);
 
-            interfaceDeclarationSyntax = interfaceDeclarationSyntax
-                .WithIdentifier(interfaceDeclarationSyntax.Identifier.WithLeadingTrivia(SyntaxFactory.Space).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
-                .WithOpenBraceToken(interfaceDeclarationSyntax.OpenBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithCloseBraceToken(interfaceDeclarationSyntax.CloseBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+            interfaceDeclarationSyntax = interfaceDeclarationSyntax.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+
 
             var asyncOperationContracts = serviceInterface.GetMembers()
                 .Cast<IMethodSymbol>()
@@ -445,10 +439,8 @@ namespace SoapClientGenerator.Roslyn
             {
                 var returnType = SyntaxFactory.ParseTypeName(serviceMethod.ReturnType.ToString());
                 var method = SyntaxFactory.MethodDeclaration(returnType, serviceMethod.Name);
-                method = method
-                    .WithIdentifier(method.Identifier.WithLeadingTrivia(SyntaxFactory.Space))
-                    .WithSemicolonToken(SyntaxFactory.ParseToken(";"))
-                    .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                method = method.WithSemicolonToken(SyntaxFactory.ParseToken(";").WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+
 
                 foreach (var parameter in serviceMethod.Parameters)
                 {
@@ -457,7 +449,7 @@ namespace SoapClientGenerator.Roslyn
                     var nameToken = SyntaxFactory.ParseToken(parameter.Name);
 
                     var param = SyntaxFactory.Parameter(nameToken);
-                    param = param.WithIdentifier(param.Identifier.WithLeadingTrivia(SyntaxFactory.Space)).WithType(parameterType);
+                    param = param.WithIdentifier(param.Identifier).WithType(parameterType);
 
                     method = method.AddParameterListParameters(param);
                 }
@@ -472,13 +464,10 @@ namespace SoapClientGenerator.Roslyn
         {
             var classDeclarationSyntax = SyntaxFactory.ClassDeclaration(serviceInterface.Name + "Client");
 
-            classDeclarationSyntax = classDeclarationSyntax
-                .WithIdentifier(classDeclarationSyntax.Identifier.WithLeadingTrivia(SyntaxFactory.Space))
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space)).Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword).WithTrailingTrivia(SyntaxFactory.Space)))
-                .WithOpenBraceToken(classDeclarationSyntax.OpenBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                .WithCloseBraceToken(classDeclarationSyntax.CloseBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
+            classDeclarationSyntax = classDeclarationSyntax.WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)).Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword)));
 
-            var interfaceBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(serviceInterface.Name)).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+
+            var interfaceBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(serviceInterface.Name));
             var clientBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(ClientBaseClassName));
             var baseList = SyntaxFactory.BaseList().AddTypes(clientBaseType, interfaceBaseType);
             classDeclarationSyntax = classDeclarationSyntax.WithBaseList(baseList);
@@ -496,13 +485,11 @@ namespace SoapClientGenerator.Roslyn
                 var method = SyntaxFactory.MethodDeclaration(returnType, serviceMethod.Name);
 
                 var modif = new SyntaxTokenList();
-                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.PublicKeyword).WithTrailingTrivia(SyntaxFactory.Space));
-                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.VirtualKeyword).WithTrailingTrivia(SyntaxFactory.Space));
+                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.PublicKeyword));
+                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.VirtualKeyword));
 
-                method = method
-                    .WithIdentifier(method.Identifier.WithLeadingTrivia(SyntaxFactory.Space))
-                    .WithModifiers(modif)
-                    .WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                method = method.WithModifiers(modif);
+
 
                 var parameter = serviceMethod.Parameters.Single();
 
@@ -511,7 +498,7 @@ namespace SoapClientGenerator.Roslyn
                 var nameToken = SyntaxFactory.ParseToken(parameter.Name);
 
                 var param = SyntaxFactory.Parameter(nameToken);
-                param = param.WithIdentifier(param.Identifier.WithLeadingTrivia(SyntaxFactory.Space)).WithType(parameterType);
+                param = param.WithType(parameterType);
 
                 method = method.AddParameterListParameters(param);
 
@@ -534,12 +521,9 @@ namespace SoapClientGenerator.Roslyn
                     bodyStr = string.Format("return this.CallAsync<{0}, {1}>(\"{2}\", {3});", parameterType, returnTypeArg.ToString(), action, parameter.Name);
                 }
 
-                var stmt = SyntaxFactory.ParseStatement(bodyStr).WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed);
+                var stmt = SyntaxFactory.ParseStatement(bodyStr);
 
                 var block = SyntaxFactory.Block(stmt);
-                block = block
-                    .WithOpenBraceToken(block.OpenBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed))
-                    .WithCloseBraceToken(block.CloseBraceToken.WithTrailingTrivia(SyntaxFactory.CarriageReturnLineFeed));
 
                 method = method.WithBody(block);
 
