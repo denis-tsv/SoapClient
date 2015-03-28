@@ -32,12 +32,12 @@ namespace SoapClientGenerator.Roslyn
             Console.WriteLine("Processing WSDL {0}", wsdlUri);
             // 1. generate raw code
             var csFilePath = Path.GetTempFileName() + ".cs";
-            //GenerateRawCode(svcutil, wsdlUri, csFilePath);
+            GenerateRawCode(svcutil, wsdlUri, csFilePath);
             Console.WriteLine("Raw file: {0}", csFilePath);
 
 			// 2. create syntax tree and semantic tree
-			//SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(csFilePath));
-			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText("tmp.cs"));
+			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(csFilePath));
+			
 
 			var mscorlib = MetadataReference.CreateFromAssembly(typeof(object).Assembly);
             var serialization = MetadataReference.CreateFromAssembly(typeof(ServiceContractAttribute).Assembly);
