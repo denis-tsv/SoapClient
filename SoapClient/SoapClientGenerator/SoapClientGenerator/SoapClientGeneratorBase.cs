@@ -43,7 +43,7 @@ namespace SoapClientGenerator
 
             Process.Start(processStartInfo).WaitForExit();
 
-            File.Copy(tempFileName + ".cs", outFile, true);
+            File.Copy(tempFileName, outFile, true);
         }
     }
 }

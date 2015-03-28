@@ -4,6 +4,8 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.ServiceModel;
+using System.Xml.Schema;
+using System.Xml.Serialization;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -30,21 +32,22 @@ namespace SoapClientGenerator.Roslyn
             Console.WriteLine("Processing WSDL {0}", wsdlUri);
             // 1. generate raw code
             var csFilePath = Path.GetTempFileName() + ".cs";
-            GenerateRawCode(svcutil, wsdlUri, csFilePath);
+            //GenerateRawCode(svcutil, wsdlUri, csFilePath);
             Console.WriteLine("Raw file: {0}", csFilePath);
 
-            // 2. create syntax tree and semantic tree
-            SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(csFilePath));
+			// 2. create syntax tree and semantic tree
+			//SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(csFilePath));
+			SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText("tmp.cs"));
 
-            var mscorlib = MetadataReference.CreateFromAssembly(typeof(object).Assembly);
+			var mscorlib = MetadataReference.CreateFromAssembly(typeof(object).Assembly);
             var serialization = MetadataReference.CreateFromAssembly(typeof(ServiceContractAttribute).Assembly);
+			var serializer = MetadataReference.CreateFromAssembly(typeof(XmlEnumAttribute).Assembly);
+			
 
-            var compilation = CSharpCompilation.Create("ServiceReference", new[] { syntaxTree }, new[] { mscorlib, serialization });
+			var compilation = CSharpCompilation.Create("ServiceReference", new[] { syntaxTree }, new[] { mscorlib, serialization, serializer });
             var semanticModel = compilation.GetSemanticModel(syntaxTree);
             var root = syntaxTree.GetRoot();
-
-
-
+			
             // 3. Parse trees
             Console.WriteLine("Gathering info...");
             var metadata = ParseTree(root, semanticModel);
@@ -64,11 +67,15 @@ namespace SoapClientGenerator.Roslyn
 
         private NamespaceDeclarationSyntax GenerateCode(CollectMetadataSyntaxWalker metadataInfo, string ns)
         {
-            var nameSpace = SyntaxFactory
-                .NamespaceDeclaration(SyntaxFactory.ParseName(ns))
-                .AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Xml.Serialization")));
+	        var nameSpace = SyntaxFactory
+		        .NamespaceDeclaration(SyntaxFactory.ParseName(ns)) //+-
+		        .AddUsings("System.Xml.Serialization")
+				.AddUsings("System.Xml.Linq")
+				.AddUsings("System.Xml.Schema")
+				.AddUsings("System");
+			//.AddUsings(SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Xml.Serialization")));
 
-            foreach (var serviceInterface in metadataInfo.Services)
+			foreach (var serviceInterface in metadataInfo.Services)
             {
                 var interfaceDeclarationSyntax = AddClientInterface(serviceInterface);
                 nameSpace = nameSpace.AddMembers(interfaceDeclarationSyntax);
@@ -103,54 +110,62 @@ namespace SoapClientGenerator.Roslyn
 
         private ClassDeclarationSyntax AddDataContract(INamedTypeSymbol classInfo)
         {
-            var classDecl = SyntaxFactory
+			var classDecl = SyntaxFactory
                 .ClassDeclaration(classInfo.Name)
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+                .WithModifiers(SyntaxKind.PublicKeyword);
 
             if (classInfo.BaseType.Name != "Object")
             {
-                var baseTypeList = SyntaxFactory.BaseList().AddTypes(SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(classInfo.BaseType.ToString())));
-                classDecl = classDecl.WithBaseList(baseTypeList);
+                //var baseTypeList = SyntaxFactory.BaseList().AddTypes(SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(classInfo.BaseType.ToString())));
+                classDecl = classDecl.WithBaseList(classInfo.BaseType.ToString());
             }
 
-            var xmlTypeAttr = classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlTypeAttribute");
-            var messageContractAttr = classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "MessageContractAttribute");
+			foreach (var customAttribute in classInfo.GetAttributes("XmlIncludeAttribute")) 
+			{
+				var attr = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlIncludeAttribute"))
+					.AddArgument(string.Format("typeof({0})", customAttribute.ConstructorArguments.First().Value));
 
-            bool addXmlRoot = false;
+				classDecl = classDecl.AddAttribute(attr);
+			}
+
+			var xmlTypeAttr = classInfo.GetAttribute("XmlTypeAttribute"); //classInfo.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlTypeAttribute");
+	        var messageContractAttr = classInfo.GetAttribute("MessageContractAttribute"); //.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "MessageContractAttribute");
+
+			bool addXmlRoot = false;
             string xmlRootElementName = null;
             string xmlRootNamespace = null;
 
             if (xmlTypeAttr != null)
             {
                 addXmlRoot = true;
-                xmlRootNamespace = xmlTypeAttr.NamedArguments.First(item => item.Key == "Namespace").Value.Value as string;
+	            xmlRootNamespace = xmlTypeAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
             }
             else
             {
                 if (messageContractAttr != null)
                 {
                     addXmlRoot = true;
-                    xmlRootElementName = messageContractAttr.NamedArguments.First(item => item.Key == "WrapperName").Value.Value as string;
-                    xmlRootNamespace = messageContractAttr.NamedArguments.First(item => item.Key == "WrapperNamespace").Value.Value as string;
+	                xmlRootElementName = messageContractAttr.GetNamedArgument("WrapperName").GetValueOrDefault<string>();//.NamedArguments.First(item => item.Key == "WrapperName").Value.Value as string;
+	                xmlRootNamespace = messageContractAttr.GetNamedArgument("WrapperNamespace").GetValueOrDefault<string>(); //.NamedArguments.First(item => item.Key == "WrapperNamespace").Value.Value as string;
                 }
             }
 
-            var bodyMember = classInfo.GetMembers().FirstOrDefault(m => m.Kind == SymbolKind.Field && m.GetAttributes().Any(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute"));
+            var bodyMember = classInfo.GetFields().FirstOrDefault(m => m.GetAttribute("MessageBodyMemberAttribute") != null);
             if (bodyMember != null)
             {
                 xmlRootElementName = bodyMember.Name;
-                var bodyAttr = bodyMember.GetAttributes().First(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute");
-                xmlRootNamespace = bodyAttr.NamedArguments.GetArgumentValueOrDefault<string>("Namespace");
+                var bodyAttr = bodyMember.GetAttribute("MessageBodyMemberAttribute");
+	            xmlRootNamespace = bodyAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
             }
 
             if (addXmlRoot)
             {
-                var attr = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlRootAttribute"));
-                var arg1 = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "ElementName", xmlRootElementName)));
-                var arg2 = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", xmlRootNamespace)));
-                attr = attr.AddArgumentListArguments(arg1, arg2);
+	            var attr = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlRootAttribute")) //+-
+		            .AddQuotedArgument("ElementName", xmlRootElementName)
+		            .AddQuotedArgument("Namespace", xmlRootNamespace);
 
-                classDecl = classDecl.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(attr));
+                //classDecl = classDecl.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(attr));//+-
+	            classDecl = classDecl.AddAttribute(attr);
             }
 
             classDecl = AddDataContractFields(classDecl, classInfo);
@@ -161,112 +176,107 @@ namespace SoapClientGenerator.Roslyn
 
         private ClassDeclarationSyntax AddDataContractProperties(ClassDeclarationSyntax classDecl, INamedTypeSymbol classInfo)
         {
-            foreach (var propertySymbol in classInfo.GetMembers()
-                .Where(m => m.Kind == SymbolKind.Property)
-                .Where(prop => !prop.GetAttributes().Any(attr => attr.AttributeClass.Name == "XmlAnyAttributeAttribute") &&
-                               !prop.GetAttributes().Any(attr => attr.AttributeClass.Name == "XmlIgnoreAttribute")).Cast<IPropertySymbol>())
+	        foreach (var propertySymbol in classInfo.GetProperties()
+				.Where(prop => prop.GetAttribute("XmlAnyAttributeAttribute") == null && prop.GetAttribute("XmlIgnoreAttribute") == null))
             {
                 if (propertySymbol.Type.Name == "XmlNode" || propertySymbol.Type.Name == "ExtensionDataObject")
                     continue;
-
-                var name = propertySymbol.Name == "fixed" ? "@fixed" : propertySymbol.Name;
+				
+				var name = propertySymbol.Name == "fixed" ? "@fixed" : propertySymbol.Name;
                 var list = SyntaxFactory.AccessorList()
                     .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)))
                     .AddAccessors(SyntaxFactory.AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(SyntaxFactory.Token(SyntaxKind.SemicolonToken)));
 
-                var propertySyntax = SyntaxFactory.PropertyDeclaration(SyntaxFactory.ParseTypeName(GetTypeName(propertySymbol.Type)), name);
-                propertySyntax = propertySyntax
-                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
+                var propertySyntax = SyntaxFactory.PropertyDeclaration(GetPropertyType(propertySymbol.Type), name)
+                    .WithModifiers(SyntaxKind.PublicKeyword)
                     .WithAccessorList(list);
 
 
-                var xmlElementAttrs = propertySymbol.GetAttributes().Where(attr => attr.AttributeClass.Name == "XmlElementAttribute");
+                var xmlElementAttrs = propertySymbol.GetAttributes("XmlElementAttribute");
                 foreach (var xmlElementAttr in xmlElementAttrs)
                 {
                     var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute"));
 
-                    var elementName = xmlElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("ElementName");
-                    if (!String.IsNullOrEmpty(elementName))
+                    var elementName = xmlElementAttr.GetNamedArgument("ElementName").GetValueOrDefault<string>();
+                    if (!string.IsNullOrEmpty(elementName))
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "ElementName", elementName)));
-                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgumentListArguments(arg);
+	                    xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("ElementName", elementName);
                     }
+	                if (xmlElementAttr.ConstructorArguments.Any())
+	                {
+		                elementName = xmlElementAttr.ConstructorArguments.First().Value as string;
+                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("ElementName", elementName);
+					}
 
                     string ns = GetNamespace(xmlElementAttr, null);
                     if (ns != null)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", ns)));
-                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgumentListArguments(arg);
+                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("Namespace", ns);
                     }
 
                     string dataType = GetDataType(xmlElementAttr);
                     if (dataType != null)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "DataType", ns)));
-                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgumentListArguments(arg);
+                        xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("DataType", dataType);
                     }
 
                     int order = GetOrder(xmlElementAttr, null);
-                    var orderArg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "Order", order)));
-                    xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgumentListArguments(orderArg);
+                    xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgument("Order", order);
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax));
-                }
+					//propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax)); //+-
+					propertySyntax = propertySyntax.AddAttribute(xmlElementAttrSyntax); //+-
+				}
 
-                var xmlAnyElementAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlAnyElementAttribute");
+                var xmlAnyElementAttr = propertySymbol.GetAttribute("XmlAnyElementAttribute");
                 if (xmlAnyElementAttr != null)
                 {
                     var xmlAnyElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlAnyElementAttribute"));
 
-                    var ns = xmlAnyElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("Namespace");
+                    var ns = xmlAnyElementAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                     if (ns != null)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", ns)));
-                        xmlAnyElementAttrSyntax = xmlAnyElementAttrSyntax.AddArgumentListArguments(arg);
+                        xmlAnyElementAttrSyntax = xmlAnyElementAttrSyntax.AddQuotedArgument("Namespace", ns);
                     }
 
-                    var order = xmlAnyElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("Order");
-                    var orderArg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "Order", order)));
-                    xmlAnyElementAttrSyntax = xmlAnyElementAttrSyntax.AddArgumentListArguments(orderArg);
+                    var order = xmlAnyElementAttr.GetNamedArgument("Order").GetValueOrDefault<int>();
+                    xmlAnyElementAttrSyntax = xmlAnyElementAttrSyntax.AddArgument("Order", order);
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAnyElementAttrSyntax));
+                    propertySyntax = propertySyntax.AddAttribute(xmlAnyElementAttrSyntax);
                 }
 
-                var xmlAttributeAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlAttributeAttribute");
+                var xmlAttributeAttr = propertySymbol.GetAttribute("XmlAttributeAttribute");
                 if (xmlAttributeAttr != null)
                 {
                     var xmlAttributeAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlAttributeAttribute"));
 
-                    var ns = xmlAttributeAttr.NamedArguments.GetArgumentValueOrDefault<string>("Namespace");
+                    var ns = xmlAttributeAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                     if (ns != null)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", ns)));
-                        xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddArgumentListArguments(arg);
+                        xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddQuotedArgument("Namespace", ns);
                     }
 
-                    var dataType = xmlAttributeAttr.NamedArguments.GetArgumentValueOrDefault<string>("DataType");
+                    var dataType = xmlAttributeAttr.GetNamedArgument("DataType").GetValueOrDefault<string>();
                     if (!string.IsNullOrEmpty(dataType))
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "DataType", dataType)));
-                        xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddArgumentListArguments(arg);
+                        xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddQuotedArgument("DataType", dataType);
                     }
 
-                    var form = xmlAttributeAttr.NamedArguments.GetArgumentValueOrDefault<string>("Form");
-                    if (form != "None")
+                    var form = xmlAttributeAttr.GetNamedArgument("Form").GetValueOrDefault<int>();
+                    if (form != (int)XmlSchemaForm.None)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = XmlSchemaForm.{1}", "Form", form)));
+                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = XmlSchemaForm.{1}", "Form", Enum.GetName(typeof(XmlSchemaForm), form))));
                         xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddArgumentListArguments(arg);
                     }
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlAttributeAttrSyntax));
+                    propertySyntax = propertySyntax.AddAttribute(xmlAttributeAttrSyntax);
                 }
 
-                var xmlTextAttr = propertySymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlTextAttribute");
+                var xmlTextAttr = propertySymbol.GetAttribute("XmlTextAttribute");
                 if (xmlTextAttr != null)
                 {
                     var xmlTextAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlTextAttribute"));
 
-                    propertySyntax = propertySyntax.AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlTextAttrSyntax));
+                    propertySyntax = propertySyntax.AddAttribute(xmlTextAttrSyntax);
                 }
 
                 classDecl = classDecl.AddMembers(propertySyntax);
@@ -275,81 +285,105 @@ namespace SoapClientGenerator.Roslyn
             return classDecl;
         }
 
-        private string GetPropertyTypeName(ITypeSymbol type)
+        private TypeSyntax GetPropertyType(ITypeSymbol type)
         {
-            if (type.Name == "XmlElement") return "XElement";
-            if (type.Name == "XmlElement[]") return "XElement[]";
-
-            return GetTypeName(type);
+	        if (type.TypeKind == TypeKind.Array)
+	        {
+		        var arrayType = (IArrayTypeSymbol) type;
+		        var elementName = arrayType.ElementType.Name == "XmlElement" ? "XElement" : GetTypeName(arrayType.ElementType);
+		        var elementType = SyntaxFactory.ParseTypeName(elementName);
+				return SyntaxFactory.ArrayType(elementType).AddRankSpecifiers(SyntaxFactory.ArrayRankSpecifier());
+			}
+	        var typeName = type.Name == "XmlElement" ? "XElement" : GetTypeName(type);
+	        return SyntaxFactory.ParseTypeName(typeName);
         }
 
         private ClassDeclarationSyntax AddDataContractFields(ClassDeclarationSyntax classDecl, INamedTypeSymbol classInfo)
         {
-            foreach (var fieldSymbol in classInfo.GetMembers().Where(m => m.Kind == SymbolKind.Field).Cast<IFieldSymbol>())
+			foreach (var fieldSymbol in classInfo.GetFields())
             {
-                var messageBodyMemberAttr = fieldSymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute");
+                var messageBodyMemberAttr = fieldSymbol.GetAttribute("MessageBodyMemberAttribute");
                 if (messageBodyMemberAttr == null) continue;
 
-                TypeSyntax type;
-                if (!fieldSymbol.GetAttributes().Any(attr => attr.AttributeClass.Name == "XmlAnyElementAttribute"))
+	            TypeSyntax type;
+                if (fieldSymbol.GetAttribute("XmlAnyElementAttribute") == null)
                 {
-                    type = SyntaxFactory.ParseTypeName(GetTypeName(fieldSymbol.Type));
-                }
+	                if (fieldSymbol.Type.TypeKind == TypeKind.Array)
+	                {
+						type = SyntaxFactory.ParseTypeName(GetTypeName(((IArrayTypeSymbol)fieldSymbol.Type).ElementType));
+		                type = SyntaxFactory.ArrayType(type).AddRankSpecifiers(SyntaxFactory.ArrayRankSpecifier());
+	                }
+	                else
+	                {
+						type = SyntaxFactory.ParseTypeName(GetTypeName(fieldSymbol.Type));
+					}
+				}
                 else
                 {
-                    type = SyntaxFactory.ParseTypeName("XElement[]");
+                    type = SyntaxFactory.ParseTypeName("XElement");
+	                type = SyntaxFactory.ArrayType(type).AddRankSpecifiers(SyntaxFactory.ArrayRankSpecifier());
                 }
                 var decl = SyntaxFactory.VariableDeclarator(fieldSymbol.Name);
 
 
                 var fieldSyntax = SyntaxFactory.FieldDeclaration(SyntaxFactory.VariableDeclaration(type).WithVariables(SyntaxFactory.SeparatedList(new[] { decl })));
 
-                var xmlElementAttr = fieldSymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlElementAttribute");
+                var xmlElementAttr = fieldSymbol.GetAttribute("XmlElementAttribute");
 
                 string elementName = null;
                 bool isNullable = true;
                 if (xmlElementAttr != null)
                 {
-                    var elementNameValue = xmlElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("ElementName");
+                    var elementNameValue = xmlElementAttr.GetNamedArgument("ElementName").GetValueOrDefault<string>();
                     if (string.IsNullOrEmpty(elementNameValue))
                     {
                         elementName = elementNameValue;
                     }
+	                if (xmlElementAttr.ConstructorArguments.Any())
+	                {
+		                elementName = xmlElementAttr.ConstructorArguments.First().Value as string;
+	                }
                 }
 
-                var xmlArrayItemAttribute = fieldSymbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == "XmlArrayItemAttribute");
+                var xmlArrayItemAttribute = fieldSymbol.GetAttribute("XmlArrayItemAttribute");
                 if (xmlArrayItemAttribute != null)
                 {
-                    elementName = xmlArrayItemAttribute.NamedArguments.GetArgumentValueOrDefault<string>("ElementName");
-                    isNullable = xmlArrayItemAttribute.NamedArguments.GetArgumentValueOrDefault<bool>("IsNullable");
+	                if (xmlArrayItemAttribute.ConstructorArguments.Any())
+	                {
+		                elementName = xmlArrayItemAttribute.ConstructorArguments.First().Value as string;
+	                }
+	                var elementNameValue = xmlArrayItemAttribute.GetNamedArgument("ElementName").GetValueOrDefault<string>();
+	                if (!string.IsNullOrEmpty(elementNameValue))
+	                {
+		                elementName = elementNameValue;
+	                }
+	                isNullable = xmlArrayItemAttribute.GetNamedArgument("IsNullable").GetValueOrDefault<bool>();
                 }
 
-
-                var args = SyntaxFactory.AttributeArgumentList();
-                args = args.AddArguments(SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "ElementName", string.IsNullOrEmpty(elementName) ? "null" : "\"" + elementName + "\""))));
-                args = args.AddArguments(SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "IsNullable", isNullable.ToString().ToLower()))));
-
+	            var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute"))
+		            .AddQuotedArgument("ElementName", elementName)
+		            .AddArgument("IsNullable", isNullable.ToString().ToLower());
+                
                 string ns = GetNamespace(xmlElementAttr, messageBodyMemberAttr);
                 if (ns != null)
                 {
-                    args = args.AddArguments(SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = \"{1}\"", "Namespace", ns))));
+	                xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("Namespace", ns);
                 }
 
                 string dataType = GetDataType(xmlElementAttr);
                 if (dataType != null)
                 {
-                    args = args.AddArguments(SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "DataType", dataType))));
+					xmlElementAttrSyntax = xmlElementAttrSyntax.AddQuotedArgument("DataType", dataType);
                 }
 
                 int order = GetOrder(xmlElementAttr, messageBodyMemberAttr);
-                args = args.AddArguments(SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = {1}", "Order", order))));
+				xmlElementAttrSyntax = xmlElementAttrSyntax.AddArgument("Order", order);
 
-                var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute")).WithArgumentList(args);
-                fieldSyntax = fieldSyntax
-                    .AddAttributeLists(SyntaxFactory.AttributeList().AddAttributes(xmlElementAttrSyntax))
-                    .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+				fieldSyntax = fieldSyntax
+                    .AddAttribute(xmlElementAttrSyntax)
+                    .WithModifiers(SyntaxKind.PublicKeyword); //WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
 
-                classDecl = classDecl.AddMembers(fieldSyntax);
+				classDecl = classDecl.AddMembers(fieldSyntax);
 
             }
 
@@ -358,27 +392,20 @@ namespace SoapClientGenerator.Roslyn
 
         private string GetTypeName(ITypeSymbol type)
         {
-            List<string> elementar = new List<string>
-            {
-                "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "char", "string", "bool", "object"
-            };
-            var name = type.ToString();
-            if (elementar.Contains(name)) return name;
-
-            return type.Name;
+	        return type.IsPrimitive() ? type.ToString() : type.Name;
         }
 
         private string GetNamespace(AttributeData xmlElementAttr, AttributeData messageBodyMemberAttr)
         {
             if (xmlElementAttr != null)
             {
-                var ns = xmlElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("Namespace");
+                var ns = xmlElementAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                 if (ns != null) return ns;
             }
 
             if (messageBodyMemberAttr != null)
             {
-                var ns = messageBodyMemberAttr.NamedArguments.GetArgumentValueOrDefault<string>("Namespace");
+                var ns = messageBodyMemberAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                 if (ns != null) return ns;
             }
 
@@ -388,19 +415,19 @@ namespace SoapClientGenerator.Roslyn
         private string GetDataType(AttributeData xmlElementAttr)
         {
             if (xmlElementAttr == null) return null;
-            return xmlElementAttr.NamedArguments.GetArgumentValueOrDefault<string>("DataType");
+            return xmlElementAttr.GetNamedArgument("DataType").GetValueOrDefault<string>();
         }
 
         private int GetOrder(AttributeData xmlElementAttr, AttributeData messageBodyMemberAttr)
         {
             if (xmlElementAttr != null)
             {
-                var order = xmlElementAttr.NamedArguments.GetArgumentValueOrDefault<int>("Order");
+                var order = xmlElementAttr.GetNamedArgument("Order").GetValueOrDefault<int>();
                 if (order > 0) return order;
             }
             if (messageBodyMemberAttr != null)
             {
-                var order = messageBodyMemberAttr.NamedArguments.GetArgumentValueOrDefault<int>("Order");
+                var order = messageBodyMemberAttr.GetNamedArgument("Order").GetValueOrDefault<int>();
                 if (order > 0) return order;
             }
 
@@ -411,11 +438,26 @@ namespace SoapClientGenerator.Roslyn
         {
             var enumDecl = SyntaxFactory
                 .EnumDeclaration(enumInfo.Name)
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+                .WithModifiers(SyntaxKind.PublicKeyword);
 
-            foreach (var member in enumInfo.GetMembers().Where(m => m.Kind == SymbolKind.Field))
+            foreach (var member in enumInfo.GetFields())
             {
-                var memberSyntax = SyntaxFactory.EnumMemberDeclaration(member.Name);
+				var memberSyntax = SyntaxFactory.EnumMemberDeclaration(member.Name);
+
+	            var xmlEnumAttr = member.GetAttribute("XmlEnumAttribute");
+				if (xmlEnumAttr != null)
+				{
+					
+					if (xmlEnumAttr.ConstructorArguments.Any())
+					{
+						var attribute = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlEnumAttribute"))
+							.AddQuotedArgument(xmlEnumAttr.ConstructorArguments.First().Value);
+						memberSyntax = memberSyntax.AddAttribute(attribute);
+
+					}
+				}
+
+				
                 enumDecl = enumDecl.AddMembers(memberSyntax);
             }
 
@@ -426,14 +468,13 @@ namespace SoapClientGenerator.Roslyn
         {
             var interfaceDeclarationSyntax = SyntaxFactory
                 .InterfaceDeclaration(serviceInterface.Name)
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)));
+                .WithModifiers(SyntaxKind.PublicKeyword);
             
-            var asyncOperationContracts = serviceInterface.GetMembers()
-                .Cast<IMethodSymbol>()
+            var asyncOperationContracts = serviceInterface.GetMethods()
                 .Where(item => ((INamedTypeSymbol)item.ReturnType).IsGenericType && item.ReturnType.Name == "Task")
-                .Where(item => item.GetAttributes().Any(attr => attr.AttributeClass.Name == "OperationContractAttribute"));
+                .Where(item => item.GetAttribute("OperationContractAttribute") != null);
             
-            foreach (var serviceMethod in asyncOperationContracts)
+            foreach (var serviceMethod in asyncOperationContracts) 
             {
                 var returnType = SyntaxFactory.ParseTypeName(serviceMethod.ReturnType.ToString());
                 var method = SyntaxFactory
@@ -461,32 +502,22 @@ namespace SoapClientGenerator.Roslyn
 
         private ClassDeclarationSyntax AddClientImplementation(INamedTypeSymbol serviceInterface)
         {
-            var interfaceBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(serviceInterface.Name));
-            var clientBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.ParseTypeName(ClientBaseClassName));
-            var baseList = SyntaxFactory.BaseList().AddTypes(clientBaseType, interfaceBaseType);
-            
             var classDeclarationSyntax = SyntaxFactory
                 .ClassDeclaration(serviceInterface.Name + "Client")
-                .WithBaseList(baseList)
-                .WithModifiers(SyntaxTokenList.Create(SyntaxFactory.Token(SyntaxKind.PublicKeyword)).Add(SyntaxFactory.Token(SyntaxKind.PartialKeyword)));
+                .WithBaseList(ClientBaseClassName, serviceInterface.Name)
+                .WithModifiers(SyntaxKind.PublicKeyword, SyntaxKind.PartialKeyword);
             
-            var asyncOperationContracts = serviceInterface.GetMembers()
-                .Cast<IMethodSymbol>()
+            var asyncOperationContracts = serviceInterface
+                .GetMethods()
                 .Where(item => ((INamedTypeSymbol)item.ReturnType).IsGenericType && item.ReturnType.Name == "Task")
-                .Where(item => item.GetAttributes().Any(attr => attr.AttributeClass.Name == "OperationContractAttribute"));
+                .Where(item => item.GetAttribute("OperationContractAttribute") != null);
             
             foreach (var serviceMethod in asyncOperationContracts)
             {
                 var returnType = SyntaxFactory.ParseTypeName(serviceMethod.ReturnType.ToString());
-                var method = SyntaxFactory.MethodDeclaration(returnType, serviceMethod.Name);
-
-                var modif = new SyntaxTokenList();
-                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.PublicKeyword));
-                modif = modif.Add(SyntaxFactory.Token(SyntaxKind.VirtualKeyword));
-
-                method = method.WithModifiers(modif);
-
-
+                var method = SyntaxFactory.MethodDeclaration(returnType, serviceMethod.Name)
+					.WithModifiers(SyntaxKind.PublicKeyword, SyntaxKind.VirtualKeyword);
+				
                 var parameter = serviceMethod.Parameters.Single();
 
                 var parameterType = SyntaxFactory.ParseTypeName(parameter.Type.ToString());
@@ -498,11 +529,11 @@ namespace SoapClientGenerator.Roslyn
 
                 method = method.AddParameterListParameters(param);
 
-                var field = parameter.Type.GetMembers().FirstOrDefault(m => m.GetAttributes().Any(attr => attr.AttributeClass.Name == "MessageBodyMemberAttribute")) as IFieldSymbol;
+                var field = parameter.Type.GetFields().FirstOrDefault(m => m.GetAttribute("MessageBodyMemberAttribute") != null);
 
-                var serviceContractAttribute = serviceMethod.GetAttributes().First(attr => attr.AttributeClass.Name == "OperationContractAttribute");
+                var serviceContractAttribute = serviceMethod.GetAttribute("OperationContractAttribute");
 
-                var action = serviceContractAttribute.NamedArguments.First(item => item.Key == "Action").Value.Value;
+                var action = serviceContractAttribute.GetNamedArgument("Action").GetValueOrDefault<string>();
 
 
                 var returnTypeArg = ((INamedTypeSymbol)serviceMethod.ReturnType).TypeArguments.FirstOrDefault();
@@ -510,7 +541,7 @@ namespace SoapClientGenerator.Roslyn
                 string bodyStr = string.Empty;
                 if (field != null)
                 {
-                    bodyStr = string.Format("return this.CallAsync<{0}, {1}>(\"{2}\", {3}.{4});", GetTypeName(field.Type), returnTypeArg.ToString(), action, parameter.Name, field.Name);
+                    bodyStr = string.Format("return this.CallAsync<{0}, {1}>(\"{2}\", {3}.{4});", GetPropertyType(field.Type), returnTypeArg.ToString(), action, parameter.Name, field.Name);
                 }
                 else
                 {
@@ -531,13 +562,5 @@ namespace SoapClientGenerator.Roslyn
         }
     }
 
-    internal static class Ext
-    {
-        internal static T GetArgumentValueOrDefault<T>(this ImmutableArray<KeyValuePair<string, TypedConstant>> parameters, string paramName)
-        {
-            if (!parameters.Any(item => item.Key == paramName)) return default(T);
-
-            return (T)parameters.First(item => item.Key == paramName).Value.Value;
-        }
-    }
+    
 }

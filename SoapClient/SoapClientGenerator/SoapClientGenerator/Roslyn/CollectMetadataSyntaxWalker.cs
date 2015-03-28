@@ -36,7 +36,13 @@ namespace SoapClientGenerator.Roslyn
         public override void VisitClassDeclaration(ClassDeclarationSyntax node)
         {
             var symbol = _semanticModel.GetDeclaredSymbol(node);
-            if (symbol.GetAttributes().Any(attr =>attr.AttributeClass.Name == "DataContractAttribute" || attr.AttributeClass.Name == "MessageContractAttribute"))
+	        if (symbol.Name == "GetSystemUrisResponseExtension")
+	        {
+		        int t = 0;
+	        }
+	        if (symbol.GetAttribute("ServiceContractAttribute") == null &&
+				!symbol.Interfaces.Any(item => item.Name == "IClientChannel") &&
+				symbol.BaseType.Name != "ClientBase")
             {
                 Contracts.Add(symbol);
             }
