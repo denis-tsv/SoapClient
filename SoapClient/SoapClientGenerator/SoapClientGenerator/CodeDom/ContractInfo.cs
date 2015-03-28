@@ -101,7 +101,7 @@ namespace SoapClientGenerator
 				{
 					Attributes = MemberAttributes.Public | MemberAttributes.Final,
 					Name = prop.Name == "fixed" ? "@fixed" : prop.Name,
-					Type = new CodeTypeReference(GetPropertyType(prop)),
+					Type = new CodeTypeReference(GetPropertyType(prop.PropertyType)),
 				};
 
 				propCode.Name += " { get; set; }";
@@ -188,15 +188,15 @@ namespace SoapClientGenerator
 			}
 		}
 
-		private static Type GetPropertyType(PropertyInfo prop)
+		public static Type GetPropertyType(Type propertyType)
 		{
-			if (prop.PropertyType == typeof(XmlElement))
+			if (propertyType == typeof(XmlElement))
 				return typeof(XElement);
 
-			if (prop.PropertyType == typeof(XmlElement[]))
+			if (propertyType == typeof(XmlElement[]))
 				return typeof(XElement[]);
 
-			return prop.PropertyType;
+			return propertyType;
 		}
 
 		private void AddFields(CodeTypeDeclaration targetClass)

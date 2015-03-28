@@ -110,9 +110,9 @@ namespace SoapClientGenerator.SoapClientGenerator.CodeDom
 
                 var parameterName = "request";
                 var parameterInfos = serviceMethod.MethodInfo.GetParameters();
-                Type sendType = parameterInfos[0].ParameterType;
-
-                foreach (var parameterInfo in parameterInfos)
+                Type sendType = ContractInfo.GetPropertyType(parameterInfos[0].ParameterType);
+	            
+	            foreach (var parameterInfo in parameterInfos)
                 {
                     var bodyMember =
                         parameterInfo.ParameterType.GetMembers(BindingFlags.Instance | BindingFlags.Public)
@@ -124,20 +124,20 @@ namespace SoapClientGenerator.SoapClientGenerator.CodeDom
                         var fieldInfo = bodyMember as FieldInfo;
                         if (fieldInfo != null)
                         {
-                            sendType = fieldInfo.FieldType;
+                            sendType = ContractInfo.GetPropertyType(fieldInfo.FieldType);
                         }
 
                         var propertyInfo = bodyMember as PropertyInfo;
                         if (propertyInfo != null)
                         {
-                            sendType = propertyInfo.PropertyType;
+                            sendType = ContractInfo.GetPropertyType(propertyInfo.PropertyType);
                         }
                     }
 
                     mth.Parameters.Add(new CodeParameterDeclarationExpression(parameterInfo.ParameterType, parameterInfo.Name));
                 }
 
-                var returnStatement = new CodeMethodReturnStatement();
+				var returnStatement = new CodeMethodReturnStatement();
 
                 var invokeExpression = new CodeMethodInvokeExpression(new CodeThisReferenceExpression(), "CallAsync", new CodePrimitiveExpression(serviceMethod.Action), new CodeVariableReferenceExpression(parameterName));
                 invokeExpression.Method.TypeArguments.Add(sendType);
