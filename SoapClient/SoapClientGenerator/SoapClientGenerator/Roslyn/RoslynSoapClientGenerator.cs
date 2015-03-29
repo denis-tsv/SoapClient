@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.ServiceModel;
@@ -67,8 +65,7 @@ namespace SoapClientGenerator.Roslyn
 
         private NamespaceDeclarationSyntax GenerateCode(CollectMetadataSyntaxWalker metadataInfo, string ns)
         {
-	        var nameSpace = SyntaxFactory
-		        .NamespaceDeclaration(SyntaxFactory.ParseName(ns)) //+-
+	        var nameSpace = SyntaxTreeExtensions.NamespaceDeclaration(ns) //SyntaxFactory.NamespaceDeclaration(SyntaxFactory.ParseName(ns)) //+-
 		        .AddUsings("System.Xml.Serialization")
 				.AddUsings("System.Xml.Linq")
 				.AddUsings("System.Xml.Schema")
@@ -122,7 +119,7 @@ namespace SoapClientGenerator.Roslyn
 
 			foreach (var customAttribute in classInfo.GetAttributes("XmlIncludeAttribute")) 
 			{
-				var attr = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlIncludeAttribute"))
+				var attr = SyntaxTreeExtensions.Attribute("XmlIncludeAttribute")
 					.AddArgument(string.Format("typeof({0})", customAttribute.ConstructorArguments.First().Value));
 
 				classDecl = classDecl.AddAttribute(attr);
@@ -160,7 +157,7 @@ namespace SoapClientGenerator.Roslyn
 
             if (addXmlRoot)
             {
-	            var attr = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlRootAttribute")) //+-
+	            var attr = SyntaxTreeExtensions.Attribute("XmlRootAttribute") 
 		            .AddQuotedArgument("ElementName", xmlRootElementName)
 		            .AddQuotedArgument("Namespace", xmlRootNamespace);
 
@@ -195,7 +192,7 @@ namespace SoapClientGenerator.Roslyn
                 var xmlElementAttrs = propertySymbol.GetAttributes("XmlElementAttribute");
                 foreach (var xmlElementAttr in xmlElementAttrs)
                 {
-                    var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute"));
+                    var xmlElementAttrSyntax = SyntaxTreeExtensions.Attribute("XmlElementAttribute");
 
                     var elementName = xmlElementAttr.GetNamedArgument("ElementName").GetValueOrDefault<string>();
                     if (!string.IsNullOrEmpty(elementName))
@@ -230,7 +227,7 @@ namespace SoapClientGenerator.Roslyn
                 var xmlAnyElementAttr = propertySymbol.GetAttribute("XmlAnyElementAttribute");
                 if (xmlAnyElementAttr != null)
                 {
-                    var xmlAnyElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlAnyElementAttribute"));
+                    var xmlAnyElementAttrSyntax = SyntaxTreeExtensions.Attribute("XmlAnyElementAttribute");
 
                     var ns = xmlAnyElementAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                     if (ns != null)
@@ -247,7 +244,7 @@ namespace SoapClientGenerator.Roslyn
                 var xmlAttributeAttr = propertySymbol.GetAttribute("XmlAttributeAttribute");
                 if (xmlAttributeAttr != null)
                 {
-                    var xmlAttributeAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlAttributeAttribute"));
+                    var xmlAttributeAttrSyntax = SyntaxTreeExtensions.Attribute("XmlAttributeAttribute");
 
                     var ns = xmlAttributeAttr.GetNamedArgument("Namespace").GetValueOrDefault<string>();
                     if (ns != null)
@@ -264,7 +261,8 @@ namespace SoapClientGenerator.Roslyn
                     var form = xmlAttributeAttr.GetNamedArgument("Form").GetValueOrDefault<int>();
                     if (form != (int)XmlSchemaForm.None)
                     {
-                        var arg = SyntaxFactory.AttributeArgument(SyntaxFactory.ParseExpression(string.Format("{0} = XmlSchemaForm.{1}", "Form", Enum.GetName(typeof(XmlSchemaForm), form))));
+						var expression = SyntaxFactory.ParseExpression(string.Format("{0} = XmlSchemaForm.{1}", "Form", Enum.GetName(typeof(XmlSchemaForm), form)));
+                        var arg = SyntaxFactory.AttributeArgument(expression);
                         xmlAttributeAttrSyntax = xmlAttributeAttrSyntax.AddArgumentListArguments(arg);
                     }
 
@@ -274,7 +272,7 @@ namespace SoapClientGenerator.Roslyn
                 var xmlTextAttr = propertySymbol.GetAttribute("XmlTextAttribute");
                 if (xmlTextAttr != null)
                 {
-                    var xmlTextAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlTextAttribute"));
+                    var xmlTextAttrSyntax = SyntaxTreeExtensions.Attribute("XmlTextAttribute");
 
                     propertySyntax = propertySyntax.AddAttribute(xmlTextAttrSyntax);
                 }
@@ -323,12 +321,12 @@ namespace SoapClientGenerator.Roslyn
                     type = SyntaxFactory.ParseTypeName("XElement");
 	                type = SyntaxFactory.ArrayType(type).AddRankSpecifiers(SyntaxFactory.ArrayRankSpecifier());
                 }
-                var decl = SyntaxFactory.VariableDeclarator(fieldSymbol.Name);
+				
+	            FieldDeclarationSyntax fieldSyntax = SyntaxTreeExtensions.FieldDeclaration(type, fieldSymbol.Name);
+				//var decl = SyntaxFactory.VariableDeclarator(fieldSymbol.Name);
+				//var fieldSyntax = SyntaxFactory.FieldDeclaration(SyntaxFactory.VariableDeclaration(type).WithVariables(SyntaxFactory.SeparatedList(new[] { decl })));
 
-
-                var fieldSyntax = SyntaxFactory.FieldDeclaration(SyntaxFactory.VariableDeclaration(type).WithVariables(SyntaxFactory.SeparatedList(new[] { decl })));
-
-                var xmlElementAttr = fieldSymbol.GetAttribute("XmlElementAttribute");
+				var xmlElementAttr = fieldSymbol.GetAttribute("XmlElementAttribute");
 
                 string elementName = null;
                 bool isNullable = true;
@@ -360,7 +358,7 @@ namespace SoapClientGenerator.Roslyn
 	                isNullable = xmlArrayItemAttribute.GetNamedArgument("IsNullable").GetValueOrDefault<bool>();
                 }
 
-	            var xmlElementAttrSyntax = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlElementAttribute"))
+	            var xmlElementAttrSyntax = SyntaxTreeExtensions.Attribute("XmlElementAttribute")
 		            .AddQuotedArgument("ElementName", elementName)
 		            .AddArgument("IsNullable", isNullable.ToString().ToLower());
                 
@@ -447,16 +445,13 @@ namespace SoapClientGenerator.Roslyn
 	            var xmlEnumAttr = member.GetAttribute("XmlEnumAttribute");
 				if (xmlEnumAttr != null)
 				{
-					
 					if (xmlEnumAttr.ConstructorArguments.Any())
 					{
-						var attribute = SyntaxFactory.Attribute(SyntaxFactory.ParseName("XmlEnumAttribute"))
+						var attribute = SyntaxTreeExtensions.Attribute("XmlEnumAttribute")
 							.AddQuotedArgument(xmlEnumAttr.ConstructorArguments.First().Value);
 						memberSyntax = memberSyntax.AddAttribute(attribute);
-
 					}
 				}
-
 				
                 enumDecl = enumDecl.AddMembers(memberSyntax);
             }
@@ -557,10 +552,8 @@ namespace SoapClientGenerator.Roslyn
                 classDeclarationSyntax = classDeclarationSyntax.AddMembers(method);
             }
 
-
             return classDeclarationSyntax;
         }
     }
-
     
 }

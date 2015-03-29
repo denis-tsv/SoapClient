@@ -9,31 +9,8 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace SoapClientGenerator.Roslyn
 {
-	public static class Ext
+	public static class SyntaxTreeExtensions
 	{
-		#region ITypeSymbol.Get...
-
-		public static IEnumerable<IFieldSymbol> GetFields(this ITypeSymbol typeSymbol)
-		{
-			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Field).Cast<IFieldSymbol>();
-		}
-
-		public static IEnumerable<IPropertySymbol> GetProperties(this ITypeSymbol typeSymbol)
-		{
-			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Property).Cast<IPropertySymbol>();
-		}
-
-		public static IEnumerable<IMethodSymbol> GetMethods(this ITypeSymbol typeSymbol)
-		{
-			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Method).Cast<IMethodSymbol>();
-		}
-
-		public static IEnumerable<IEventSymbol> GetEvents(this ITypeSymbol typeSymbol)
-		{
-			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Event).Cast<IEventSymbol>();
-		}
-		#endregion
-
 		#region WithModifiers
 
 		public static FieldDeclarationSyntax WithModifiers(this FieldDeclarationSyntax typeSymbol, params SyntaxKind[] modifiers)
@@ -122,32 +99,7 @@ namespace SoapClientGenerator.Roslyn
 			return namespaceDeclaration;
 		}
 
-		public static AttributeData GetAttribute(this ISymbol symbol, string attribute)
-		{
-			return symbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == attribute);
-		}
-
-		public static IEnumerable<AttributeData> GetAttributes(this ISymbol symbol, string attribute)
-		{
-			return symbol.GetAttributes().Where(attr => attr.AttributeClass.Name == attribute);
-		}
-
-		public static TypedConstant? GetNamedArgument(this AttributeData attribute, string argumentName)
-		{
-			var argument = attribute.NamedArguments.FirstOrDefault(item => item.Key == argumentName);
-
-			if (argument.Equals(default(KeyValuePair<string, TypedConstant>))) return null;
-
-			return argument.Value;
-		}
-
-		public static T GetValueOrDefault<T>(this TypedConstant? constant)
-		{
-			if (constant == null) return default(T);
-
-			return (T)constant.Value.Value;
-		}
-
+		
 		public static AttributeSyntax AddArgument(this AttributeSyntax attribute, string name, object value)
 		{
 			return AddFormattedArgument(attribute, name, value, "{0} = {1}");
@@ -187,16 +139,6 @@ namespace SoapClientGenerator.Roslyn
 			return attribute.AddArgumentListArguments(argument);
 		}
 
-		private static readonly HashSet<string> PrimitiveTypeNames = new HashSet<string>
-			{
-				"byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "char", "string", "bool", "object"
-			};
-
-		public static bool IsPrimitive(this ITypeSymbol type)
-		{
-			return PrimitiveTypeNames.Contains(type.ToString());
-		}
-
 		public static ClassDeclarationSyntax AddAttribute(this ClassDeclarationSyntax classDeclaration, AttributeSyntax attribute)
 		{
 			var attributeList = SyntaxFactory.AttributeList().AddAttributes(attribute);
@@ -219,6 +161,86 @@ namespace SoapClientGenerator.Roslyn
 		{
 			var attributeList = SyntaxFactory.AttributeList().AddAttributes(attribute);
 			return enumMemberDeclaration.AddAttributeLists(attributeList);
+		}
+
+		public static NamespaceDeclarationSyntax NamespaceDeclaration(string name)
+		{
+			return SyntaxFactory.NamespaceDeclaration(SyntaxFactory.ParseName(name));
+		}
+
+		public static AttributeSyntax Attribute(string name)
+		{
+			return SyntaxFactory.Attribute(SyntaxFactory.ParseName(name));
+		}
+
+		public static FieldDeclarationSyntax FieldDeclaration(TypeSyntax type, string name)
+		{
+			var variable = SyntaxFactory.VariableDeclarator(name);
+			var variableDecl = SyntaxFactory.VariableDeclaration(type)
+				.WithVariables(SyntaxFactory.SeparatedList(new[] {variable}));
+            return SyntaxFactory.FieldDeclaration(variableDecl);
+		}
+	}
+
+	public static class SemanticTreeExtensions
+	{
+		#region ITypeSymbol.Get...
+
+		public static IEnumerable<IFieldSymbol> GetFields(this ITypeSymbol typeSymbol)
+		{
+			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Field).Cast<IFieldSymbol>();
+		}
+
+		public static IEnumerable<IPropertySymbol> GetProperties(this ITypeSymbol typeSymbol)
+		{
+			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Property).Cast<IPropertySymbol>();
+		}
+
+		public static IEnumerable<IMethodSymbol> GetMethods(this ITypeSymbol typeSymbol)
+		{
+			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Method).Cast<IMethodSymbol>();
+		}
+
+		public static IEnumerable<IEventSymbol> GetEvents(this ITypeSymbol typeSymbol)
+		{
+			return typeSymbol.GetMembers().Where(m => m.Kind == SymbolKind.Event).Cast<IEventSymbol>();
+		}
+		#endregion
+
+		public static AttributeData GetAttribute(this ISymbol symbol, string attribute)
+		{
+			return symbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == attribute);
+		}
+
+		public static IEnumerable<AttributeData> GetAttributes(this ISymbol symbol, string attribute)
+		{
+			return symbol.GetAttributes().Where(attr => attr.AttributeClass.Name == attribute);
+		}
+
+		public static TypedConstant? GetNamedArgument(this AttributeData attribute, string argumentName)
+		{
+			var argument = attribute.NamedArguments.FirstOrDefault(item => item.Key == argumentName);
+
+			if (argument.Equals(default(KeyValuePair<string, TypedConstant>))) return null;
+
+			return argument.Value;
+		}
+
+		public static T GetValueOrDefault<T>(this TypedConstant? constant)
+		{
+			if (constant == null) return default(T);
+
+			return (T)constant.Value.Value;
+		}
+
+		private static readonly HashSet<string> PrimitiveTypeNames = new HashSet<string>
+			{
+				"byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "char", "string", "bool", "object"
+			};
+
+		public static bool IsPrimitive(this ITypeSymbol type)
+		{
+			return PrimitiveTypeNames.Contains(type.ToString());
 		}
 	}
 }
